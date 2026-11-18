@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WW2 Interactive Map — Интерактивная карта Второй мировой войны (1939–1945)</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="styles/app.css" />
+</head>
+<body>
+  <div id="app-shell">
+    <div id="map" role="application" aria-label="Интерактивная карта Второй мировой войны"></div>
+
+    <!-- Top Control HUD -->
+    <header class="hud-top">
+      <div class="hud-row">
+        <div class="hud-cluster">
+          <div class="brand-title">WW2 MAP · 1939–1945</div>
+          <div class="hud-divider"></div>
+          <div class="hud-date-wrap">
+            <span id="hud-month-label" class="hud-month">Сентябрь 1939</span>
+            <span id="hud-phase-tag" class="hud-phase">Начало Второй мировой войны</span>
+          </div>
+        </div>
+
+        <div class="hud-cluster">
+          <div class="search-wrap">
+            <input type="text" id="battle-search-input" class="search-input" placeholder="Поиск сражения (70 битв)..." autocomplete="off" />
+            <div id="battle-search-results" class="search-dropdown is-hidden"></div>
+          </div>
+          <button type="button" id="btn-layer-relief" class="chip-btn is-active" title="Физический рельеф без современных границ (при наличии сети)">
+            <span id="relief-status-dot" class="status-dot"></span>Рельеф
+          </button>
+          <button type="button" id="btn-layer-frontlines" class="chip-btn is-active" title="Линии фронта и зоны оккупации">Фронты</button>
+          <button type="button" id="btn-layer-rivers" class="chip-btn is-active" title="Крупнейшие реки мира (офлайн)">Реки</button>
+          <button type="button" id="btn-toggle-legend" class="chip-btn">Легенда</button>
+          <button type="button" id="btn-toggle-sidebar" class="chip-btn is-active">Скрыть ▸</button>
+        </div>
+      </div>
+
+      <div class="hud-row">
+        <div class="hud-cluster">
+          <button type="button" class="chip-btn is-active" data-theater="all">Все ТВД</button>
+          <button type="button" class="chip-btn" data-theater="eastern">Восточный фронт</button>
+          <button type="button" class="chip-btn" data-theater="western">Запад и Атлантика</button>
+          <button type="button" class="chip-btn" data-theater="mediterranean">Средиземн. и Африка</button>
+          <button type="button" class="chip-btn" data-theater="pacific">Тихий океан</button>
+          <button type="button" class="chip-btn" data-theater="asia">Азия</button>
+        </div>
+
+        <div class="hud-cluster">
+          <span style="font-size:11px;color:#fde68a;font-weight:700;">★ Тактика:</span>
+          <button type="button" class="chip-btn chip-btn--tac" data-jump-tac="moscow">Москва</button>
+          <button type="button" class="chip-btn chip-btn--tac" data-jump-tac="stalingrad">Сталинград</button>
+          <button type="button" class="chip-btn chip-btn--tac" data-jump-tac="kursk">Курск</button>
+          <button type="button" class="chip-btn chip-btn--tac" data-jump-tac="midway">Мидуэй</button>
+          <button type="button" class="chip-btn chip-btn--tac" data-jump-tac="normandy">Нормандия</button>
+          <button type="button" class="chip-btn chip-btn--tac" data-jump-tac="berlin">Берлин</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Legend Popover -->
+    <aside id="legend-popover" class="legend-popover is-hidden">
+      <div class="legend-title">Условные обозначения</div>
+      <div id="legend-items"></div>
+    </aside>
+
+    <!-- Right Info Sidebar -->
+    <aside id="sidebar-panel" class="sidebar-panel">
+      <div class="sidebar-header">
+        <span class="sidebar-header-title">Оперативная сводка</span>
+      </div>
+      <div id="sidebar-body" class="sidebar-body"></div>
+    </aside>
+
+    <!-- Global 73-month Timeline Bar -->
+    <section id="global-timeline-bar" class="timeline-bar" aria-label="Таймлайн войны">
+      <div class="timeline-controls-row">
+        <div class="timeline-btn-group">
+          <button type="button" id="btn-prev-month" class="chip-btn" title="Предыдущий месяц (←)">◀</button>
+          <button type="button" id="btn-play-global" class="chip-btn">▶ Пуск</button>
+          <button type="button" id="btn-next-month" class="chip-btn" title="Следующий месяц (→)">▶</button>
+          <button type="button" id="btn-speed-global" class="chip-btn" title="Скорость анимации">1×</button>
+        </div>
+        <div class="slider-wrap">
+          <input type="range" id="global-slider" min="0" max="72" value="0" step="1" aria-label="Выбор месяца (сентябрь 1939 — сентябрь 1945)" />
+          <div id="timeline-milestones" class="timeline-milestones"></div>
+        </div>
+      </div>
+      <div id="timeline-ticker-text" class="timeline-ticker"></div>
+    </section>
+
+    <!-- Tactical Battle Phase Timeline Bar -->
+    <section id="tactical-timeline-bar" class="timeline-bar is-hidden" aria-label="Таймлайн тактических фаз битвы">
+      <div class="tac-bar-top">
+        <button type="button" id="btn-exit-tactical" class="btn-exit-tactical">← Вернуться к глобальной карте мира</button>
+        <div id="tac-bar-title" class="tac-bar-title"></div>
+        <div class="timeline-btn-group">
+          <button type="button" id="btn-prev-phase" class="chip-btn">◀ Фаза</button>
+          <button type="button" id="btn-play-tactical" class="chip-btn">▶ Автоход</button>
+          <button type="button" id="btn-next-phase" class="chip-btn">Фаза ▶</button>
+        </div>
+      </div>
+      <div id="tac-phase-steps" class="tac-steps-row"></div>
+    </section>
+  </div>
+
+  <!-- Local scripts only (100% file:// offline compatible, zero fetch to local files) -->
+  <script defer src="vendor/leaflet/leaflet.js"></script>
+  <script defer src="data/world_1939.js"></script>
+  <script defer src="data/timeline_events.js"></script>
+  <script defer src="data/battles.js"></script>
+  <script defer src="data/tactical_battles.js"></script>
+  <script defer src="src/state.js"></script>
+  <script defer src="src/tactical_engine.js"></script>
+  <script defer src="src/map_engine.js"></script>
+  <script defer src="src/ui.js"></script>
+  <script defer src="src/app.js"></script>
+</body>
+</html>

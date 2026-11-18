@@ -1,0 +1,15 @@
+{
+  "name": "ww2-interactive-map",
+  "version": "1.0.0",
+  "description": "Интерактивная 2D-карта событий Второй мировой войны (1939–1945) с поддержкой file://",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/data.test.js tests/state.test.js",
+    "test:e2e": "node tests/e2e_file_protocol.mjs",
+    "test:all": "node --test tests/data.test.js tests/state.test.js && node tests/e2e_file_protocol.mjs"
+  },
+  "devDependencies": {
+    "leaflet": "^1.9.4",
+    "playwright-core": "^1.59.1"
+  }
+}

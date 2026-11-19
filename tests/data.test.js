@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const worldData = require('../data/world_1939.js');
+const citiesData = require('../data/cities.js');
 const timeline = require('../data/timeline_events.js');
 const battlesData = require('../data/battles.js');
 const tacticalData = require('../data/tactical_battles.js');
@@ -92,6 +93,56 @@ test('TIMELINE covers exact 73 months (1939-09..1945-09) and maps all 173 countr
   assert.equal(byYm['1944-08'].factions.france_north, 'allies');
   assert.equal(byYm['1945-05'].factions.germany, 'allies_occupied');
   assert.equal(byYm['1945-09'].factions.japan, 'allies_occupied');
+
+  // Finland must remain neutral during Winter War (no artificial battle-only recoloring)
+  assert.equal(byYm['1939-09'].factions.finland, 'neutral');
+  assert.equal(byYm['1939-12'].factions.finland, 'neutral');
+  assert.equal(byYm['1940-02'].factions.finland, 'neutral');
+  assert.equal(byYm['1940-03'].factions.finland, 'neutral');
+  assert.equal(byYm['1941-06'].factions.finland, 'axis');
+  assert.equal(byYm['1944-09'].factions.finland, 'allies');
+
+  // No country should temporarily switch away from neutral and revert back to neutral for a battle
+  for (const id of featureIds) {
+    let sawNonNeutral = false;
+    for (const mo of months) {
+      const f = mo.factions[id];
+      if (f !== 'neutral') {
+        sawNonNeutral = true;
+      } else if (sawNonNeutral) {
+        assert.fail(`country ${id} reverted to neutral at ${mo.month} (possible artificial battle-only recoloring)`);
+      }
+    }
+  }
+
+  // Global frontlines must be removed across all 73 months
+  for (const mo of months) {
+    assert.deepEqual(mo.frontlines, [], `global frontlines should be empty at ${mo.month}`);
+  }
+});
+
+test('ALWAYS_VISIBLE_CITIES defines capitals and 2 key cities for major powers', () => {
+  const cities = citiesData.ALWAYS_VISIBLE_CITIES;
+  assert.ok(Array.isArray(cities) && cities.length >= 45);
+  const ids = new Set();
+  const featureIds = new Set(worldData.WORLD_1939.features.map((f) => f.properties.id));
+  for (const c of cities) {
+    assert.ok(c.id && !ids.has(c.id), `duplicate or missing city id: ${c.id}`);
+    ids.add(c.id);
+    assert.ok(c.name && c.countryId && c.countryRu);
+    assert.ok(featureIds.has(c.countryId), `city ${c.id} references unknown region ${c.countryId}`);
+    assert.ok(c.lat >= -70 && c.lat <= 80 && c.lon >= -180 && c.lon <= 180);
+  }
+  const majorGroups = [
+    'СССР', 'Германия', 'Великобритания', 'Франция', 'Италия', 'Польша',
+    'США', 'Японская империя', 'Китайская Республика', 'Канада',
+    'Австралия', 'Британская Индия', 'Бразилия', 'Испания', 'Турция'
+  ];
+  for (const country of majorGroups) {
+    const grp = cities.filter((c) => c.countryRu === country && c.tier <= 2);
+    assert.equal(grp.length, 3, `${country} should have 1 capital + 2 key cities`);
+    assert.equal(grp.filter((c) => c.isCapital).length, 1, `${country} should have 1 capital`);
+  }
 });
 
 test('BATTLES dataset is complete, spans all theaters & all 73 months, and links 6 tactical battles', () => {
@@ -100,16 +151,32 @@ test('BATTLES dataset is complete, spans all theaters & all 73 months, and links
 
   const ids = new Set();
   const tacticalLinked = [];
+  const validBattleFactions = new Set(['allies', 'ussr', 'axis', 'china', 'vichy', 'neutral']);
   for (const b of battles) {
     assert.ok(!ids.has(b.id), `duplicate battle id: ${b.id}`);
     ids.add(b.id);
     assert.ok(b.title && b.dates && b.sideA && b.sideB);
+    assert.ok(validBattleFactions.has(b.sideAFaction), `invalid sideAFaction in ${b.id}: ${b.sideAFaction}`);
+    assert.ok(validBattleFactions.has(b.sideBFaction), `invalid sideBFaction in ${b.id}: ${b.sideBFaction}`);
     assert.ok(b.commandersA && b.commandersB && b.forcesA && b.forcesB && b.casualtiesA && b.casualtiesB);
     assert.ok(b.outcome && b.summary);
     assert.ok(b.monthStart >= '1939-09' && b.monthEnd <= '1945-09' && b.monthStart <= b.monthEnd);
     assert.ok(b.lat >= -70 && b.lat <= 80 && b.lon >= -180 && b.lon <= 180);
+    assert.ok(Array.isArray(b.cities), `battle ${b.id} must have cities array`);
+    const cityNames = new Set();
+    for (const c of b.cities) {
+      assert.ok(c.name && typeof c.lat === 'number' && typeof c.lon === 'number', `invalid city in ${b.id}`);
+      assert.ok(!cityNames.has(c.name), `duplicate city ${c.name} in ${b.id}`);
+      cityNames.add(c.name);
+      assert.ok(c.lat >= -70 && c.lat <= 80 && c.lon >= -180 && c.lon <= 180);
+    }
     if (b.hasTactical) tacticalLinked.push(b);
   }
+
+  const byId = Object.fromEntries(battles.map((b) => [b.id, b]));
+  assert.equal(byId.winter_war_1939.sideBFaction, 'neutral');
+  assert.equal(byId.iran_1941.sideBFaction, 'neutral');
+  assert.equal(byId.mers_el_kebir_1940.sideBFaction, 'vichy');
 
   assert.equal(tacticalLinked.length, 6, 'expected exactly 6 tactical battles');
   for (const tb of tacticalLinked) {

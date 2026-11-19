@@ -49,6 +49,20 @@ html, body {
   font-family: var(--font-sans);
 }
 
+.leaflet-container:focus,
+.leaflet-pane :focus,
+.leaflet-pane :focus-visible,
+.leaflet-container svg:focus,
+.leaflet-container svg:focus-visible,
+.leaflet-container path:focus,
+.leaflet-container path:focus-visible,
+.leaflet-interactive:focus,
+.leaflet-interactive:focus-visible,
+.leaflet-marker-icon:focus,
+.leaflet-marker-icon:focus-visible {
+  outline: none !important;
+}
+
 .leaflet-top.leaflet-left {
   top: var(--hud-top-offset, 96px);
   left: 10px;
@@ -314,11 +328,30 @@ html, body {
 }
 .legend-pin--tac { background: #f59e0b; color: #111827; font-weight: 700; }
 .legend-pin--std { background: #dc2626; color: #ffffff; }
-.legend-line {
-  width: 16px;
-  height: 0;
-  border-top: 3px dashed #ef4444;
+.legend-city-dot {
+  width: 10px;
+  height: 10px;
+  margin: 0 3px;
+  border-radius: 50%;
+  display: inline-block;
   flex-shrink: 0;
+}
+.legend-city-dot--capital {
+  background: #fde68a;
+  border: 1.5px solid #09101d;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.75);
+}
+.legend-city-dot--major {
+  width: 8px;
+  height: 8px;
+  margin: 0 4px;
+  background: #e2e8f0;
+  border: 1px solid #09101d;
+}
+.legend-city-dot--conflict {
+  background: #f59e0b;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.45);
 }
 
 /* Right Sidebar Panel */
@@ -468,6 +501,8 @@ html, body {
 .versus-col--allies { border-left: 3px solid #38bdf8; }
 .versus-col--china { border-left: 3px solid #2dd4bf; }
 .versus-col--axis { border-left: 3px solid #94a3b8; }
+.versus-col--vichy { border-left: 3px solid #a1829d; }
+.versus-col--neutral { border-left: 3px solid #bfb59b; }
 
 .versus-kicker {
   font-size: 10px;
@@ -849,6 +884,108 @@ html, body {
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* Global Cities Layer (always-visible capitals/major cities & conflict cities) */
+.city-marker-wrap {
+  background: transparent;
+  border: none;
+}
+
+.city-pin {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.city-dot {
+  display: block;
+  border-radius: 50%;
+  transition: transform 0.14s ease;
+}
+
+.city-pin--capital .city-dot {
+  width: 7px;
+  height: 7px;
+  background: #fde68a;
+  border: 1.5px solid #09101d;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.75), 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+.city-pin--major .city-dot {
+  width: 5px;
+  height: 5px;
+  background: #e2e8f0;
+  border: 1px solid #09101d;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.city-pin--conflict .city-dot {
+  width: 10px;
+  height: 10px;
+  background: #f59e0b;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 2px 6px rgba(0, 0, 0, 0.9);
+}
+
+.city-pin:hover .city-dot {
+  transform: scale(1.25);
+}
+
+.city-leader {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 14px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.city-label {
+  position: absolute;
+  white-space: nowrap;
+  pointer-events: none;
+  line-height: 1.15;
+  font-family: var(--font-sans);
+}
+
+.city-pin--capital .city-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fef3c7;
+  text-shadow: -1px -1px 0 #09101d, 1px -1px 0 #09101d, -1px 1px 0 #09101d, 1px 1px 0 #09101d, 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+.city-pin--major .city-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #e2e8f0;
+  text-shadow: -1px -1px 0 #09101d, 1px -1px 0 #09101d, -1px 1px 0 #09101d, 1px 1px 0 #09101d, 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+.city-pin--conflict .city-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fef3c7;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid #fbbf24;
+  padding: 1px 6px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+
+.city-pos--right { left: 13px; top: 50%; transform: translateY(-50%); }
+.city-pos--left { right: 13px; top: 50%; transform: translateY(-50%); }
+.city-pos--top { bottom: 13px; left: 50%; transform: translateX(-50%); }
+.city-pos--bottom { top: 13px; left: 50%; transform: translateX(-50%); }
+
+.city-pin.is-near-pin .city-pos--right { left: 25px; }
+.city-pin.is-near-pin .city-pos--left { right: 25px; }
+.city-pin.is-near-pin .city-pos--top { bottom: 25px; }
+.city-pin.is-near-pin .city-pos--bottom { top: 25px; }
 
 /* Tactical Units & Landmarks */
 .tac-unit-marker,

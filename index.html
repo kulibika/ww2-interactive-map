@@ -31,7 +31,7 @@
           <button type="button" id="btn-layer-relief" class="chip-btn is-active" title="Физический рельеф без современных границ (при наличии сети)">
             <span id="relief-status-dot" class="status-dot"></span>Рельеф
           </button>
-          <button type="button" id="btn-layer-frontlines" class="chip-btn is-active" title="Линии фронта и зоны оккупации">Фронты</button>
+          <button type="button" id="btn-layer-frontlines" class="chip-btn is-active" title="Зоны оккупации по месяцам">Оккупация</button>
           <button type="button" id="btn-layer-rivers" class="chip-btn is-active" title="Крупнейшие реки мира (офлайн)">Реки</button>
           <button type="button" id="btn-toggle-legend" class="chip-btn">Легенда</button>
           <button type="button" id="btn-toggle-sidebar" class="chip-btn is-active">Скрыть ▸</button>
@@ -109,6 +109,7 @@
   <!-- Local scripts only (100% file:// offline compatible, zero fetch to local files) -->
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="data/world_1939.js"></script>
+  <script defer src="data/cities.js"></script>
   <script defer src="data/timeline_events.js"></script>
   <script defer src="data/battles.js"></script>
   <script defer src="data/tactical_battles.js"></script>

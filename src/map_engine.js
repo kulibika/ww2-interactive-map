@@ -1,9 +1,10 @@
 // Leaflet Hybrid Map Engine: offline 1939 political map, clipped monthly occupation zones,
-// rivers, animated frontlines, optional borderless online relief tiles, battle pins & tactical flyTo
+// rivers, cities (always-visible capitals/major cities + conflict cities), optional relief, battle pins & tactical flyTo
 (function (root) {
   function createMapEngine(containerId, store, callbacks) {
     var L = root.L;
     var worldData = root.WW2_WORLD_DATA;
+    var citiesData = (root.WW2_CITIES && root.WW2_CITIES.ALWAYS_VISIBLE_CITIES) || [];
     var tacticalEngineFactory = root.WW2_TACTICAL_ENGINE;
 
     var map = L.map(containerId, {
@@ -27,7 +28,7 @@
     map.createPane('paneCountries').style.zIndex = 240;
     map.createPane('paneOccupation').style.zIndex = 270;
     map.createPane('paneRivers').style.zIndex = 310;
-    map.createPane('paneFrontlines').style.zIndex = 360;
+    map.createPane('paneCities').style.zIndex = 390;
     map.createPane('paneTactical').style.zIndex = 420;
     map.createPane('paneBattles').style.zIndex = 470;
 
@@ -115,6 +116,25 @@
     }
     buildGraticule();
 
+    function escHtml(str) {
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function blurMapFocus(ev) {
+      if (ev && ev.originalEvent && ev.originalEvent.target && typeof ev.originalEvent.target.blur === 'function') {
+        ev.originalEvent.target.blur();
+      }
+      if (typeof document !== 'undefined' && document.activeElement &&
+          document.activeElement.closest && document.activeElement.closest('.leaflet-container') &&
+          typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
+    }
+
     // 3. 1939 World Political Layer
     var countryLayersById = {};
     var countriesLayer = L.geoJSON(worldData.WORLD_1939, {
@@ -142,6 +162,7 @@
         layer.on('click', function (ev) {
           if (store.state.mode === 'tactical') return;
           L.DomEvent.stopPropagation(ev);
+          blurMapFocus(ev);
           store.selectRegion(pid);
         });
       }
@@ -190,8 +211,8 @@
           interactive: !!label,
           style: {
             color: fmeta.border,
-            weight: 1.0,
-            dashArray: '4 3',
+            weight: 0.9,
+            opacity: 0.72,
             fillColor: fmeta.color,
             fillOpacity: occOp
           }
@@ -236,38 +257,365 @@
       riversLayer.addTo(map);
     }
 
-    // 6. Animated Frontlines Layer
-    var frontlinesGroup = L.layerGroup().addTo(map);
-    function renderFrontlines() {
-      frontlinesGroup.clearLayers();
-      if (store.state.mode === 'tactical' || !store.state.layers.frontlines) return;
-      var m = store.getCurrentMonth();
-      if (!m || !m.frontlines) return;
+    // 6. Cities Layer (always-visible capitals & key cities + selected conflict cities)
+    var citiesGroup = L.layerGroup().addTo(map);
+    var measureCtx = null;
 
-      for (var i = 0; i < m.frontlines.length; i++) {
-        var fl = m.frontlines[i];
-        var flColor = fl.style === 'ussr' ? '#ef4444' : fl.style === 'allies' ? '#38bdf8' : '#f59e0b';
-        var glow = L.polyline(fl.coords, {
-          pane: 'paneFrontlines',
-          color: flColor,
-          weight: 6,
-          opacity: 0.22,
-          interactive: false
-        }).addTo(frontlinesGroup);
-        void glow;
+    function normalizeCityName(name) {
+      return String(name || '').toLowerCase().replace(/\s*\(.*?\)\s*/g, '').trim();
+    }
 
-        var line = L.polyline(fl.coords, {
-          pane: 'paneFrontlines',
-          color: flColor,
-          weight: 2.8,
-          opacity: 0.95,
-          className: 'ww2-frontline ww2-frontline--' + fl.style
-        }).addTo(frontlinesGroup);
+    function measureLabelSize(text, isConflict, isCapital) {
+      if (!measureCtx && typeof document !== 'undefined') {
+        var c = document.createElement('canvas');
+        if (c && c.getContext) measureCtx = c.getContext('2d');
+      }
+      var textW;
+      if (measureCtx) {
+        measureCtx.font = isConflict
+          ? '700 10.5px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif'
+          : (isCapital
+            ? '700 10px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif'
+            : '600 9.5px "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif');
+        textW = Math.ceil(measureCtx.measureText(text).width);
+      } else {
+        textW = Math.ceil((isConflict ? 7.0 : 6.2) * text.length);
+      }
+      return {
+        w: textW + (isConflict ? 16 : 6),
+        h: isConflict ? 19 : (isCapital ? 15 : 14)
+      };
+    }
 
-        line.bindTooltip('<strong>' + fl.theater + '</strong><br>' + fl.label, {
-          sticky: true,
-          className: 'ww2-tooltip'
+    function boxesOverlap(a, b, pad) {
+      var p = pad == null ? 2 : pad;
+      return !(a[2] + p <= b[0] || a[0] - p >= b[2] || a[3] + p <= b[1] || a[1] - p >= b[3]);
+    }
+
+    function overlapArea(a, b) {
+      var xOverlap = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+      var yOverlap = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+      return xOverlap * yOverlap;
+    }
+
+    function makeCityPlacement(pt, pos, dist, w, h) {
+      var d = Math.max(5, Math.round(dist * 0.74));
+      if (pos === 'left') {
+        return {
+          box: [pt.x - dist - w, pt.y - h / 2, pt.x - dist, pt.y + h / 2],
+          css: 'right:' + (7 + dist) + 'px;top:50%;transform:translateY(-50%);'
+        };
+      }
+      if (pos === 'top') {
+        return {
+          box: [pt.x - w / 2, pt.y - dist - h, pt.x + w / 2, pt.y - dist],
+          css: 'bottom:' + (7 + dist) + 'px;left:50%;transform:translateX(-50%);'
+        };
+      }
+      if (pos === 'bottom') {
+        return {
+          box: [pt.x - w / 2, pt.y + dist, pt.x + w / 2, pt.y + dist + h],
+          css: 'top:' + (7 + dist) + 'px;left:50%;transform:translateX(-50%);'
+        };
+      }
+      if (pos === 'top-right') {
+        return {
+          box: [pt.x + d, pt.y - d - h, pt.x + d + w, pt.y - d],
+          css: 'left:' + (7 + d) + 'px;bottom:' + (7 + d) + 'px;'
+        };
+      }
+      if (pos === 'top-left') {
+        return {
+          box: [pt.x - d - w, pt.y - d - h, pt.x - d, pt.y - d],
+          css: 'right:' + (7 + d) + 'px;bottom:' + (7 + d) + 'px;'
+        };
+      }
+      if (pos === 'bottom-right') {
+        return {
+          box: [pt.x + d, pt.y + d, pt.x + d + w, pt.y + d + h],
+          css: 'left:' + (7 + d) + 'px;top:' + (7 + d) + 'px;'
+        };
+      }
+      if (pos === 'bottom-left') {
+        return {
+          box: [pt.x - d - w, pt.y + d, pt.x - d, pt.y + d + h],
+          css: 'right:' + (7 + d) + 'px;top:' + (7 + d) + 'px;'
+        };
+      }
+      return {
+        box: [pt.x + dist, pt.y - h / 2, pt.x + dist + w, pt.y + h / 2],
+        css: 'left:' + (7 + dist) + 'px;top:50%;transform:translateY(-50%);'
+      };
+    }
+
+    function renderCities() {
+      citiesGroup.clearLayers();
+      if (store.state.mode === 'tactical') return;
+
+      var z = map.getZoom();
+      var selectedBattle = store.getSelectedBattle();
+      var merged = [];
+      for (var i = 0; i < citiesData.length; i++) {
+        var c = citiesData[i];
+        merged.push({
+          id: c.id,
+          name: c.name,
+          countryId: c.countryId,
+          countryRu: c.countryRu,
+          lat: c.lat,
+          lon: c.lon,
+          isCapital: !!c.isCapital,
+          tier: c.tier || 3,
+          labelPos: c.labelPos || 'right',
+          isAlways: true,
+          isConflict: false
         });
+      }
+
+      if (selectedBattle && Array.isArray(selectedBattle.cities)) {
+        for (var j = 0; j < selectedBattle.cities.length; j++) {
+          var cc = selectedBattle.cities[j];
+          var ccNorm = normalizeCityName(cc.name);
+          var match = null;
+          for (var k = 0; k < merged.length; k++) {
+            var m = merged[k];
+            if (normalizeCityName(m.name) === ccNorm ||
+                (Math.abs(m.lat - cc.lat) < 0.08 && Math.abs(m.lon - cc.lon) < 0.08)) {
+              match = m;
+              break;
+            }
+          }
+          if (match) {
+            match.isConflict = true;
+            if (cc.labelPos) match.labelPos = cc.labelPos;
+            if (cc.name && cc.name.length > match.name.length && cc.name.indexOf('(') !== -1) {
+              match.conflictLabel = cc.name;
+            }
+          } else {
+            merged.push({
+              id: 'conflict_' + selectedBattle.id + '_' + j,
+              name: cc.name,
+              countryId: null,
+              countryRu: '',
+              lat: cc.lat,
+              lon: cc.lon,
+              isCapital: false,
+              tier: 0,
+              labelPos: cc.labelPos || 'right',
+              isAlways: false,
+              isConflict: true
+            });
+          }
+        }
+      }
+
+      // Priority order: 0 = conflict city, 1 = major capital, 2 = major key city, 3 = other capital
+      merged.sort(function (a, b) {
+        var pa = a.isConflict ? 0 : a.tier;
+        var pb = b.isConflict ? 0 : b.tier;
+        return pa - pb;
+      });
+
+      // Obstacles from active battle markers and tactical tags (including selected scale 1.22x)
+      var activeBattles = store.getActiveBattles();
+      var battlePts = [];
+      var obstacleBoxes = [];
+      for (var bi = 0; bi < activeBattles.length; bi++) {
+        var b = activeBattles[bi];
+        var bp = map.project([b.lat, b.lon], z);
+        var isSelPin = store.state.selectedBattleId === b.id;
+        var baseRad = b.hasTactical ? 16 : 12;
+        var rad = isSelPin ? Math.ceil(baseRad * 1.22) + 2 : (baseRad + 2);
+        battlePts.push({ x: bp.x, y: bp.y, rad: rad });
+        obstacleBoxes.push([bp.x - rad, bp.y - rad, bp.x + rad, bp.y + rad]);
+        if (b.hasTactical && !isSelPin) {
+          obstacleBoxes.push([bp.x - 38, bp.y + 16, bp.x + 38, bp.y + 35]);
+        }
+      }
+
+      // Pre-compute projected coordinates & reserve ALL city dots before placing ANY labels
+      var dotBoxes = [];
+      for (var di = 0; di < merged.length; di++) {
+        var dCity = merged[di];
+        var dPt = map.project([dCity.lat, dCity.lon], z);
+        dCity._pt = dPt;
+        var dotR = dCity.isConflict ? 6 : 4;
+        dotBoxes.push([dPt.x - dotR, dPt.y - dotR, dPt.x + dotR, dPt.y + dotR]);
+      }
+
+      var placedLabels = [];
+      var DIR_ORDER = ['right', 'left', 'top', 'bottom', 'top-right', 'top-left', 'bottom-right', 'bottom-left'];
+
+      for (var ci = 0; ci < merged.length; ci++) {
+        var city = merged[ci];
+        var pt = city._pt;
+
+        var nearPin = false;
+        for (var bpi = 0; bpi < battlePts.length; bpi++) {
+          var dx = pt.x - battlePts[bpi].x;
+          var dy = pt.y - battlePts[bpi].y;
+          if (Math.sqrt(dx * dx + dy * dy) < battlePts[bpi].rad + 6) {
+            nearPin = true;
+            break;
+          }
+        }
+
+        var displayName = city.conflictLabel || city.name;
+        var sz = measureLabelSize(displayName, city.isConflict, city.isCapital);
+        var w = sz.w;
+        var h = sz.h;
+
+        var candidates = [city.labelPos || 'right'].concat(DIR_ORDER);
+        var uniqDirs = [];
+        var seenPos = {};
+        for (var ui = 0; ui < candidates.length; ui++) {
+          if (!seenPos[candidates[ui]]) {
+            seenPos[candidates[ui]] = true;
+            uniqDirs.push(candidates[ui]);
+          }
+        }
+
+        var rings;
+        if (city.isConflict) {
+          rings = [9, 16, 24, 32, 42, 54, 68, 84, 102];
+        } else if (city.tier <= 2 && z >= 3) {
+          rings = [6, 10, 14, 18, 23, 29, 36, 44, 54, 66, 80];
+        } else if (nearPin && z >= 3) {
+          rings = [6, 21, 27];
+        } else {
+          rings = [6];
+        }
+
+        var chosen = null;
+        var chosenDist = 0;
+        var bestFallback = null;
+        var bestFallbackDist = rings[0];
+        var minOverlap = Infinity;
+
+        for (var ri2 = 0; ri2 < rings.length && !chosen; ri2++) {
+          var dist = rings[ri2];
+          for (var pi = 0; pi < uniqDirs.length; pi++) {
+            var pos = uniqDirs[pi];
+            var cand = makeCityPlacement(pt, pos, dist, w, h);
+            var box = cand.box;
+            var hits = false;
+            var area = 0;
+
+            for (var ob = 0; ob < obstacleBoxes.length; ob++) {
+              if (boxesOverlap(box, obstacleBoxes[ob], 2)) {
+                hits = true;
+                area += overlapArea(box, obstacleBoxes[ob]);
+              }
+            }
+            for (var db = 0; db < dotBoxes.length; db++) {
+              if (db === ci) continue;
+              if (boxesOverlap(box, dotBoxes[db], 2)) {
+                hits = true;
+                area += overlapArea(box, dotBoxes[db]) + 40;
+              }
+            }
+            for (var lb = 0; lb < placedLabels.length; lb++) {
+              if (boxesOverlap(box, placedLabels[lb], 2)) {
+                hits = true;
+                area += overlapArea(box, placedLabels[lb]);
+              }
+            }
+
+            if (!hits) {
+              chosen = cand;
+              chosenDist = dist;
+              break;
+            }
+            if (area < minOverlap) {
+              minOverlap = area;
+              bestFallback = cand;
+              bestFallbackDist = dist;
+            }
+          }
+        }
+
+        var showLabel = false;
+        var finalPlacement = null;
+        var finalDist = 0;
+        if (chosen) {
+          showLabel = true;
+          finalPlacement = chosen;
+          finalDist = chosenDist;
+        } else if (city.isConflict) {
+          showLabel = true;
+          finalPlacement = bestFallback;
+          finalDist = bestFallbackDist;
+        }
+
+        if (showLabel && finalPlacement) {
+          placedLabels.push(finalPlacement.box);
+        }
+
+        city._showLabel = showLabel;
+        city._labelCss = finalPlacement ? finalPlacement.css : '';
+        city._labelBox = finalPlacement ? finalPlacement.box : null;
+        city._labelDist = finalDist;
+        city._displayName = displayName;
+        city._nearPin = nearPin;
+      }
+
+      for (var ri = 0; ri < merged.length; ri++) {
+        (function (city) {
+          var kindClass = city.isConflict
+            ? 'city-pin--conflict'
+            : (city.isCapital ? 'city-pin--capital' : 'city-pin--major');
+          var pinClass = 'city-pin ' + kindClass + (city._nearPin ? ' is-near-pin' : '');
+          var leaderHtml = '';
+          if (city._showLabel && city._labelBox && city._labelDist >= 15) {
+            var b = city._labelBox;
+            var pt = city._pt;
+            var ax = Math.max(b[0], Math.min(b[2], pt.x));
+            var ay = Math.max(b[1], Math.min(b[3], pt.y));
+            var ldx = ax - pt.x;
+            var ldy = ay - pt.y;
+            if (Math.sqrt(ldx * ldx + ldy * ldy) >= 13) {
+              var strokeColor = city.isConflict ? 'rgba(251, 191, 36, 0.78)' : 'rgba(226, 232, 240, 0.45)';
+              leaderHtml = '<svg class="city-leader" viewBox="0 0 14 14"><line x1="7" y1="7" x2="' +
+                (7 + ldx).toFixed(1) + '" y2="' + (7 + ldy).toFixed(1) + '" stroke="' + strokeColor + '" stroke-width="1.2" /></svg>';
+            }
+          }
+          var labelHtml = city._showLabel
+            ? '<span class="city-label" style="' + city._labelCss + '">' + escHtml(city._displayName) + '</span>'
+            : '';
+          var icon = L.divIcon({
+            className: 'city-marker-wrap',
+            iconSize: [14, 14],
+            iconAnchor: [7, 7],
+            html: '<div class="' + pinClass + '" data-city-name="' + escHtml(city.name) + '" data-city-conflict="' + (city.isConflict ? '1' : '0') + '">' +
+                  leaderHtml +
+                  '<span class="city-dot"></span>' +
+                  labelHtml +
+                  '</div>'
+          });
+          var marker = L.marker([city.lat, city.lon], {
+            icon: icon,
+            pane: 'paneCities',
+            zIndexOffset: city.isConflict ? 500 : (city.tier === 1 ? 250 : (city.tier === 2 ? 150 : 80))
+          }).addTo(citiesGroup);
+
+          var roleText = city.isConflict
+            ? (city.isCapital ? 'Столица · Город конфликта' : 'Город конфликта')
+            : (city.isCapital ? 'Столица' : 'Важный город');
+          var subText = city.countryRu ? (city.countryRu + ' · ' + roleText) : roleText;
+          marker.bindTooltip('<strong>' + escHtml(city._displayName) + '</strong><br><span style="color:#cbd5e1">' + escHtml(subText) + '</span>', {
+            direction: 'top',
+            offset: [0, -8],
+            className: 'ww2-tooltip'
+          });
+
+          marker.on('click', function (ev) {
+            L.DomEvent.stopPropagation(ev);
+            blurMapFocus(ev);
+            if (!city.isConflict && city.countryId) {
+              store.selectRegion(city.countryId);
+            }
+          });
+        })(merged[ri]);
       }
     }
 
@@ -287,7 +635,7 @@
             ' battle-pin--' + b.theater;
           var html = '<div class="' + cls + '" data-battle-id="' + b.id + '">' +
                      '<span class="battle-pin-core">' + (isTac ? '★' : '⚔') + '</span>' +
-                     (isTac ? '<span class="battle-pin-tag">' + shortBattleTag(b.title) + '</span>' : '') +
+                     (isTac && !isSelected ? '<span class="battle-pin-tag">' + shortBattleTag(b.title) + '</span>' : '') +
                      '</div>';
           var icon = L.divIcon({
             className: 'battle-marker-wrap',
@@ -310,6 +658,7 @@
 
           marker.on('click', function (ev) {
             L.DomEvent.stopPropagation(ev);
+            blurMapFocus(ev);
             store.selectBattle(b.id);
           });
         })(active[i]);
@@ -382,6 +731,12 @@
       }
     });
 
+    map.on('zoomend', function () {
+      if (store.state.mode === 'global') {
+        renderCities();
+      }
+    });
+
     function sync(reason) {
       // Relief layer toggle
       if (reason === 'layer:relief') {
@@ -408,7 +763,6 @@
 
       if (reason === 'layer:frontlines') {
         renderOccupationZones();
-        renderFrontlines();
         return;
       }
 
@@ -431,7 +785,7 @@
         prevMode = 'tactical';
         restyleCountries();
         occupationGroup.clearLayers();
-        frontlinesGroup.clearLayers();
+        citiesGroup.clearLayers();
         battlesGroup.clearLayers();
         tacticalEngine.render(tac, phase, store.state.selectedUnitId, function (unit) {
           store.selectUnit(unit.id);
@@ -449,8 +803,8 @@
         prevTacticalViewKey = null;
         restyleCountries();
         renderOccupationZones();
-        renderFrontlines();
         renderBattleMarkers();
+        renderCities();
         if (reason === 'jumpToBattle') {
           var jb = store.getSelectedBattle();
           if (jb) {

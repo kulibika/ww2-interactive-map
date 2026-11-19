@@ -91,6 +91,152 @@ async function run() {
 
     await page.screenshot({ path: path.join(SHOT_DIR, '01_global_1939_09.png') });
 
+    // 1a. Verify NO global frontlines exist, focus outline is suppressed when clicking Poland, and always-visible cities render cleanly without label overlap
+    const frontlineCountSep39 = await page.locator('.ww2-frontline').count();
+    assert.equal(frontlineCountSep39, 0, 'Global map must not render frontline lines');
+
+    // Click Poland polygon directly via real mouse click on projected Poznan area (52.0, 17.0), clear of Warsaw pin
+    const polandPt = await page.evaluate(() => {
+      const m = window.__WW2_APP__.mapEngine.map;
+      const pt = m.latLngToContainerPoint([52.0, 17.0]);
+      return { x: pt.x, y: pt.y };
+    });
+    await page.mouse.click(polandPt.x, polandPt.y);
+    await page.waitForTimeout(150);
+    const focusOutlineCheck = await page.evaluate(() => {
+      const active = document.activeElement;
+      const cs = active ? getComputedStyle(active) : null;
+      const paths = [...document.querySelectorAll('path.leaflet-interactive')];
+      const anyFocusedOutline = paths.some((p) => {
+        const s = getComputedStyle(p);
+        return p === active && s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0;
+      });
+      return {
+        selectedRegionId: window.__WW2_APP__.store.state.selectedRegionId,
+        sidebar: document.getElementById('sidebar-body').textContent,
+        activeTag: active ? active.tagName : null,
+        outlineStyle: cs ? cs.outlineStyle : null,
+        anyFocusedOutline
+      };
+    });
+    assert.equal(focusOutlineCheck.selectedRegionId, 'poland_west', 'Clicking western Poland must select poland_west region');
+    assert.ok(focusOutlineCheck.sidebar.includes('Польша (Западная)'), 'Clicking Poland on map should show Польша (Западная) card');
+    assert.equal(focusOutlineCheck.anyFocusedOutline, false, 'Clicked SVG polygon must not display browser focus outline');
+    await page.evaluate(() => { window.__WW2_APP__.store.clearSelection(); });
+    await page.waitForTimeout(150);
+
+    // Check ALL 45 always-visible Tier 1+2 cities & zero conflict cities when no battle is selected,
+    // and zero label-label / label-dot / label-pin overlaps across key months at zoom 3
+    for (const checkYm of ['1939-09', '1941-10', '1942-11', '1945-04']) {
+      await page.evaluate((ym) => {
+        window.__WW2_APP__.store.setMonthByStr(ym);
+        window.__WW2_APP__.mapEngine.map.setView([34, 22], 3, { animate: false });
+      }, checkYm);
+      await page.waitForTimeout(80);
+      const citiesCheck = await page.evaluate(() => {
+        const pins = [...document.querySelectorAll('.city-pin')];
+        const conflictPins = pins.filter((el) => el.getAttribute('data-city-conflict') === '1');
+        const labels = [...document.querySelectorAll('.city-label')].map((el) => ({
+          text: el.textContent,
+          name: el.closest('.city-pin').getAttribute('data-city-name'),
+          rect: el.getBoundingClientRect()
+        }));
+        const dots = pins.map((el) => ({
+          name: el.getAttribute('data-city-name'),
+          rect: el.querySelector('.city-dot').getBoundingClientRect()
+        }));
+        const battlePins = [...document.querySelectorAll('.battle-pin')].map((el) => ({
+          id: el.getAttribute('data-battle-id'),
+          rect: el.getBoundingClientRect()
+        }));
+        const tier12 = window.WW2_CITIES.ALWAYS_VISIBLE_CITIES.filter((c) => c.tier <= 2).map((c) => c.name);
+        const missingTier12 = tier12.filter((n) => !labels.some((l) => l.name === n));
+        const hit = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+        const overlaps = [];
+        for (let i = 0; i < labels.length; i++) {
+          for (let j = i + 1; j < labels.length; j++) {
+            if (hit(labels[i].rect, labels[j].rect)) overlaps.push(`LBL:${labels[i].text}<->${labels[j].text}`);
+          }
+          for (const d of dots) {
+            if (d.name !== labels[i].name && hit(labels[i].rect, d.rect)) overlaps.push(`DOT:${labels[i].text}<->${d.name}`);
+          }
+          for (const p of battlePins) {
+            if (hit(labels[i].rect, p.rect)) overlaps.push(`PIN:${labels[i].text}<->${p.id}`);
+          }
+        }
+        return { totalPins: pins.length, conflictCount: conflictPins.length, missingTier12, overlaps };
+      });
+      assert.ok(citiesCheck.totalPins >= 45, `Expected >=45 always-visible city pins at ${checkYm}, got ${citiesCheck.totalPins}`);
+      assert.equal(citiesCheck.conflictCount, 0, `No conflict cities should be shown before selecting a battle (${checkYm})`);
+      assert.deepEqual(citiesCheck.missingTier12, [], `All 45 major capitals & key cities must be labeled at zoom 3 (${checkYm}): missing ${citiesCheck.missingTier12.join(', ')}`);
+      assert.deepEqual(citiesCheck.overlaps, [], `City label/dot/pin overlaps at zoom 3 (${checkYm}): ${citiesCheck.overlaps.join(', ')}`);
+    }
+    await page.evaluate(() => { window.__WW2_APP__.store.setMonthIndex(0); });
+    await page.waitForTimeout(80);
+
+    // Click an always-visible city marker (Париж) -> selects region without focus outline and keeps ArrowRight timeline shortcut working
+    await page.locator('.city-pin[data-city-name="Париж"] .city-dot').click();
+    await page.waitForTimeout(120);
+    const parisClickState = await page.evaluate(() => ({
+      selectedRegionId: window.__WW2_APP__.store.state.selectedRegionId,
+      activeInsideMap: !!(document.activeElement && document.activeElement.closest && document.activeElement.closest('.leaflet-container'))
+    }));
+    assert.equal(parisClickState.selectedRegionId, 'france_north', 'Clicking Paris city marker should select France North');
+    assert.equal(parisClickState.activeInsideMap, false, 'Clicking city marker must blur map element so no focus outline appears');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(80);
+    assert.equal((await page.textContent('#hud-month-label')).trim(), 'Октябрь 1939', 'ArrowRight must still step month after clicking a city marker');
+    await page.evaluate(() => {
+      window.__WW2_APP__.store.clearSelection();
+      window.__WW2_APP__.store.setMonthIndex(0);
+    });
+    await page.waitForTimeout(80);
+
+    // Select Poland 1939 battle -> conflict cities ('Варшава', 'Вестерплатте (Гданьск)') appear; deselect -> disappear
+    await page.locator('[data-battle-id="poland_1939"]').click();
+    await page.waitForTimeout(200);
+    const polandBattleCities = await page.evaluate(() =>
+      [...document.querySelectorAll('.city-pin[data-city-conflict="1"]')].map((el) => el.getAttribute('data-city-name'))
+    );
+    assert.ok(polandBattleCities.includes('Варшава') && polandBattleCities.includes('Вестерплатте (Гданьск)'),
+      `Expected Poland 1939 conflict cities, got ${polandBattleCities.join(', ')}`);
+    await page.locator('#btn-back-month-overview').click();
+    await page.waitForTimeout(150);
+    const afterDeselectConflictCount = await page.locator('.city-pin[data-city-conflict="1"]').count();
+    assert.equal(afterDeselectConflictCount, 0, 'Conflict cities must disappear when deselecting the battle');
+
+    // 1b. Verify Finland remains neutral in 1939-12 while Winter War battle can still be selected; verify Vichy & neutral battle cards
+    await page.evaluate(() => { window.__WW2_APP__.store.setMonthByStr('1939-12'); });
+    await page.waitForTimeout(200);
+    await page.evaluate(() => { window.__WW2_APP__.store.selectRegion('finland'); });
+    await page.waitForTimeout(150);
+    const finlandDec39 = await page.textContent('#sidebar-body');
+    assert.ok(finlandDec39.includes('Финляндия') && finlandDec39.includes('Нейтральные'),
+      'Finland must stay neutral in Dec 1939 during Winter War');
+    await page.locator('[data-battle-id="winter_war_1939"]').click();
+    await page.waitForTimeout(200);
+    const winterWarCard = await page.textContent('#sidebar-body');
+    assert.ok(winterWarCard.includes('Советско-финская война') && winterWarCard.includes('Финляндия'),
+      'Winter War battle card should open even with neutral Finland');
+    assert.equal(await page.locator('.versus-col--neutral').count(), 1, 'Winter War card must style neutral Side B');
+    const winterWarCities = await page.evaluate(() =>
+      [...document.querySelectorAll('.city-pin[data-city-conflict="1"]')].map((el) => el.getAttribute('data-city-name'))
+    );
+    assert.ok(winterWarCities.includes('Суомуссалми') && winterWarCities.includes('Выборг'),
+      `Expected Winter War conflict cities, got ${winterWarCities.join(', ')}`);
+
+    await page.evaluate(() => { window.__WW2_APP__.store.jumpToBattle('mers_el_kebir_1940'); });
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('.versus-col--vichy').count(), 1, 'Mers-el-Kebir card must style Vichy Side B');
+    await page.evaluate(() => { window.__WW2_APP__.store.jumpToBattle('iran_1941'); });
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('.versus-col--neutral').count(), 1, 'Iran 1941 card must style neutral Side B');
+    await page.evaluate(() => {
+      window.__WW2_APP__.store.clearSelection();
+      window.__WW2_APP__.mapEngine.map.setView([34, 22], 3, { animate: false });
+    });
+    await page.waitForTimeout(150);
+
     // 2. Scrub global timeline slider to Nov 1942 (index 38) -> Stalingrad & El Alamein
     await page.locator('#global-slider').evaluate((el) => {
       el.value = '38';
@@ -251,8 +397,83 @@ async function run() {
     await page.locator('#battle-search-input').fill('Курск');
     await page.waitForTimeout(150);
     await page.locator('[data-jump-battle="kursk_1943"]').click();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1050);
     assert.equal((await page.textContent('#hud-month-label')).trim(), 'Июль 1943');
+    const kurskCitiesCheck = await page.evaluate(() => {
+      const conflictPins = [...document.querySelectorAll('.city-pin[data-city-conflict="1"]')];
+      const labels = [...document.querySelectorAll('.city-label')].map((el) => ({
+        text: el.textContent,
+        rect: el.getBoundingClientRect()
+      }));
+      const hit = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+      const overlaps = [];
+      for (let i = 0; i < labels.length; i++) {
+        for (let j = i + 1; j < labels.length; j++) {
+          if (hit(labels[i].rect, labels[j].rect)) {
+            overlaps.push(`${labels[i].text}<->${labels[j].text}`);
+          }
+        }
+      }
+      return {
+        conflictNames: conflictPins.map((el) => el.getAttribute('data-city-name')),
+        selectedTagCount: document.querySelectorAll('.battle-pin.is-selected .battle-pin-tag').length,
+        overlaps
+      };
+    });
+    assert.equal(kurskCitiesCheck.selectedTagCount, 0, 'Selected tactical battle pin should hide duplicate bottom tag');
+    for (const cname of ['Курск', 'Орёл', 'Белгород', 'Харьков', 'Поныри', 'Прохоровка']) {
+      assert.ok(kurskCitiesCheck.conflictNames.includes(cname), `Missing Kursk conflict city: ${cname}`);
+    }
+    assert.deepEqual(kurskCitiesCheck.overlaps, [], `City label overlap in Kursk view: ${kurskCitiesCheck.overlaps.join(', ')}`);
+
+    // 7a. Audit ALL 70 battles at both zoom 3 and jumpToBattle zoom (4/5) for zero label-label, label-dot, and label-pin overlaps
+    const all70Issues = await page.evaluate(() => {
+      const store = window.__WW2_APP__.store;
+      const map = window.__WW2_APP__.mapEngine.map;
+      const hit = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+      const issues = [];
+      for (const b of store.battles) {
+        for (const z of [3, b.theater === 'pacific' ? 4 : 5]) {
+          store.setMonthByStr(b.monthStart);
+          store.setTheaterFilter('all');
+          store.selectBattle(b.id);
+          map.setView([b.lat, b.lon], z, { animate: false });
+          const conflictPins = [...document.querySelectorAll('.city-pin[data-city-conflict="1"]')].map((el) => el.getAttribute('data-city-name'));
+          for (const c of b.cities) {
+            if (!conflictPins.includes(c.name)) {
+              issues.push(`${b.id}@z${z}:missing(${c.name})`);
+            }
+          }
+          const labels = [...document.querySelectorAll('.city-label')].map((el) => ({
+            text: el.textContent,
+            name: el.closest('.city-pin').getAttribute('data-city-name'),
+            rect: el.getBoundingClientRect()
+          }));
+          const dots = [...document.querySelectorAll('.city-pin')].map((el) => ({
+            name: el.getAttribute('data-city-name'),
+            rect: el.querySelector('.city-dot').getBoundingClientRect()
+          }));
+          const pins = [...document.querySelectorAll('.battle-pin')].map((el) => ({
+            id: el.getAttribute('data-battle-id'),
+            rect: el.getBoundingClientRect()
+          }));
+          for (let i = 0; i < labels.length; i++) {
+            for (let j = i + 1; j < labels.length; j++) {
+              if (hit(labels[i].rect, labels[j].rect)) issues.push(`${b.id}@z${z}:LBL(${labels[i].text}<->${labels[j].text})`);
+            }
+            for (const d of dots) {
+              if (d.name !== labels[i].name && hit(labels[i].rect, d.rect)) issues.push(`${b.id}@z${z}:DOT(${labels[i].text}<->${d.name})`);
+            }
+            for (const p of pins) {
+              if (hit(labels[i].rect, p.rect)) issues.push(`${b.id}@z${z}:PIN(${labels[i].text}<->${p.id})`);
+            }
+          }
+        }
+      }
+      store.clearSelection();
+      return issues;
+    });
+    assert.deepEqual(all70Issues, [], `All-70-battle city audit failed: ${all70Issues.join(', ')}`);
 
     await page.locator('#btn-speed-global').click();
     await page.locator('#btn-play-global').click();
@@ -329,6 +550,16 @@ async function run() {
       assert.deepEqual(tacLayout, { hudOverlapsLegend: false, legendOverlapsBot: false },
         `Tactical legend overlap at ${vp.width}x${vp.height}: ${JSON.stringify(tacLayout)}`);
     }
+
+    // 9. Verify fresh mobile 390x844 session auto-collapses sidebar and allows clean city/battle interaction
+    const mobilePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await mobilePage.route(/^https?:\/\//, (route) => route.abort());
+    mobilePage.on('pageerror', (err) => errors.push(`mobile pageerror: ${err.message}`));
+    await mobilePage.goto(INDEX_URL, { waitUntil: 'load' });
+    await mobilePage.waitForSelector('.city-pin', { timeout: 8000 });
+    const mobileSidebarCollapsed = await mobilePage.locator('#sidebar-panel').evaluate((el) => el.classList.contains('is-collapsed'));
+    assert.equal(mobileSidebarCollapsed, true, 'Mobile 390x844 must initialize with sidebar collapsed');
+    await mobilePage.close();
 
     assert.equal(errors.length, 0, `Browser errors detected:\n${errors.join('\n')}`);
     console.log('E2E file:// offline verification PASSED! Screenshots saved to:', SHOT_DIR);

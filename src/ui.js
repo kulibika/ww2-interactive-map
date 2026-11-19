@@ -118,7 +118,9 @@
       html += '<div class="legend-divider"></div>' +
         '<div class="legend-row"><span class="legend-pin legend-pin--tac">★</span><span class="legend-label">Ключевая битва с тактическим режимом (6)</span></div>' +
         '<div class="legend-row"><span class="legend-pin legend-pin--std">⚔</span><span class="legend-label">Сражение месяца</span></div>' +
-        '<div class="legend-row"><span class="legend-line"></span><span class="legend-label">Анимированная линия фронта</span></div>';
+        '<div class="legend-row"><span class="legend-city-dot legend-city-dot--capital"></span><span class="legend-label">Столица государства</span></div>' +
+        '<div class="legend-row"><span class="legend-city-dot legend-city-dot--major"></span><span class="legend-label">Важный город основной страны</span></div>' +
+        '<div class="legend-row"><span class="legend-city-dot legend-city-dot--conflict"></span><span class="legend-label">Город выбранного конфликта</span></div>';
       elLegendItems.innerHTML = html;
     }
     renderLegend();

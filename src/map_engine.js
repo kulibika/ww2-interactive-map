@@ -12,6 +12,7 @@
       zoom: 3,
       minZoom: 2,
       maxZoom: 13,
+      renderer: L.svg({ padding: 0.6 }),
       zoomControl: false,
       worldCopyJump: false,
       maxBounds: [[-72, -215], [84, 215]],
@@ -22,8 +23,10 @@
     map.attributionControl.setPrefix(false);
     L.control.zoom({ position: 'topleft' }).addTo(map);
 
-    // Z-ordered custom panes
-    map.createPane('paneRelief').style.zIndex = 150;
+    // Z-ordered custom panes + padded SVG renderers so panning never clips edges
+    var paneRelief = map.createPane('paneRelief');
+    paneRelief.style.zIndex = 150;
+    paneRelief.style.filter = 'brightness(0.76)';
     map.createPane('paneGraticule').style.zIndex = 180;
     map.createPane('paneCountries').style.zIndex = 240;
     map.createPane('paneOccupation').style.zIndex = 270;
@@ -31,6 +34,11 @@
     map.createPane('paneCities').style.zIndex = 390;
     map.createPane('paneTactical').style.zIndex = 420;
     map.createPane('paneBattles').style.zIndex = 470;
+
+    var svgGraticule = L.svg({ pane: 'paneGraticule', padding: 0.6 });
+    var svgCountries = L.svg({ pane: 'paneCountries', padding: 0.6 });
+    var svgOccupation = L.svg({ pane: 'paneOccupation', padding: 0.6 });
+    var svgRivers = L.svg({ pane: 'paneRivers', padding: 0.6 });
 
     // 1. Optional Borderless Physical Relief Layer (Esri World_Shaded_Relief — ZERO modern political borders)
     var RELIEF_ATTR = 'Рельеф: Esri World Shaded Relief (без совр. границ)';
@@ -41,7 +49,10 @@
         pane: 'paneRelief',
         maxZoom: 13,
         maxNativeZoom: 13,
-        opacity: 0.72,
+        opacity: 1,
+        keepBuffer: 6,
+        updateWhenIdle: false,
+        updateInterval: 100,
         attribution: ''
       }
     );
@@ -49,8 +60,21 @@
     var reliefLoadedOnce = false;
     var consecutiveErrors = 0;
 
+    // Pre-fetch 1 tile ring (256px) outside the visible viewport so panning lands on loaded tiles
+    var baseGetTiledPixelBounds = L.TileLayer.prototype._getTiledPixelBounds;
+    reliefLayer._getTiledPixelBounds = function (center) {
+      var b = baseGetTiledPixelBounds.call(this, center);
+      if (reliefFailed) return b;
+      return L.bounds(b.min.subtract([256, 256]), b.max.add([256, 256]));
+    };
+
+    var mapEl = map.getContainer();
+
     function syncReliefChrome() {
       var shouldShowAttr = store.state.layers.relief && reliefLoadedOnce && !reliefFailed;
+      if (mapEl) {
+        mapEl.classList.toggle('is-relief-online', shouldShowAttr);
+      }
       if (shouldShowAttr && !reliefAttrShown) {
         map.attributionControl.addAttribution(RELIEF_ATTR);
         reliefAttrShown = true;
@@ -98,6 +122,7 @@
       for (lat = -60; lat <= 75; lat += 15) {
         L.polyline([[lat, -200], [lat, 200]], {
           pane: 'paneGraticule',
+          renderer: svgGraticule,
           color: lat === 0 ? 'rgba(148,163,184,0.22)' : 'rgba(148,163,184,0.10)',
           weight: lat === 0 ? 1.1 : 0.7,
           dashArray: lat === 0 ? null : '3 5',
@@ -107,6 +132,7 @@
       for (lon = -180; lon <= 180; lon += 15) {
         L.polyline([[-70, lon], [82, lon]], {
           pane: 'paneGraticule',
+          renderer: svgGraticule,
           color: lon === 0 ? 'rgba(148,163,184,0.20)' : 'rgba(148,163,184,0.10)',
           weight: lon === 0 ? 1.1 : 0.7,
           dashArray: lon === 0 ? null : '3 5',
@@ -139,6 +165,7 @@
     var countryLayersById = {};
     var countriesLayer = L.geoJSON(worldData.WORLD_1939, {
       pane: 'paneCountries',
+      renderer: svgCountries,
       style: function (feature) {
         return computeCountryStyle(feature.properties.id);
       },
@@ -208,6 +235,7 @@
         var fmeta = store.getFactionMeta(factionId);
         var layer = L.geoJSON({ type: 'Feature', properties: {}, geometry: geomObj }, {
           pane: 'paneOccupation',
+          renderer: svgOccupation,
           interactive: !!label,
           style: {
             color: fmeta.border,
@@ -246,6 +274,7 @@
     // 5. Offline Major Rivers Layer
     var riversLayer = L.geoJSON(worldData.RIVERS, {
       pane: 'paneRivers',
+      renderer: svgRivers,
       interactive: false,
       style: {
         color: '#5796cf',

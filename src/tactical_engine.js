@@ -2,6 +2,7 @@
 (function (root) {
   function createTacticalEngine(map, layerGroup) {
     var L = root.L;
+    var svgTactical = L.svg({ pane: 'paneTactical', padding: 0.6 });
 
     var ARROW_STYLES = {
       ussr_attack: { color: '#ef4444', weight: 4.5, dashArray: null },
@@ -110,6 +111,7 @@
           var pkColor = pk.side === 'axis' ? '#991b1b' : '#1e40af';
           var poly = L.polygon(pk.coords, {
             pane: 'paneTactical',
+            renderer: svgTactical,
             color: '#fca5a5',
             weight: 2,
             dashArray: '6 4',
@@ -127,6 +129,7 @@
           var flColor = fl.style === 'ussr' ? '#ef4444' : fl.style === 'allies' ? '#38bdf8' : '#f59e0b';
           var line = L.polyline(fl.coords, {
             pane: 'paneTactical',
+            renderer: svgTactical,
             color: flColor,
             weight: 4,
             opacity: 0.9,
@@ -143,6 +146,7 @@
           var st = ARROW_STYLES[arr.type] || ARROW_STYLES.axis_attack;
           var arrowLine = L.polyline(arr.coords, {
             pane: 'paneTactical',
+            renderer: svgTactical,
             color: st.color,
             weight: st.weight,
             opacity: 0.92,
